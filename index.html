@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3m Room Modeler - Color Fixed</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/GLTFExporter.js"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0f172a;
+            color: white;
+            font-family: sans-serif;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        .ui-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(15, 23, 42, 0.9);
+            padding: 24px;
+            border-radius: 16px;
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            max-width: 320px;
+            max-height: 90vh;
+            overflow-y: auto;
+            z-index: 10;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+        }
+
+        input[type="color"] {
+            appearance: none;
+            border: none;
+            width: 30px;
+            height: 30px;
+            cursor: pointer;
+            background: none;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="ui-panel">
+        <h1 class="text-xl font-bold mb-1">Room Maker Pro v2.7</h1>
+        <p class="text-[10px] text-gray-400 mb-4">Color management updated for Blender!</p>
+
+        <section class="mb-4 border-b border-gray-700 pb-4">
+            <h2 class="text-sm font-bold mb-2 text-blue-400 italic">Color Custom</h2>
+            <div class="grid grid-cols-4 gap-2">
+                <div>
+                    <label class="text-[10px] block opacity-70">Floor</label>
+                    <input type="color" id="floorColor" value="#4a4a4a">
+                </div>
+                <div>
+                    <label class="text-[10px] block opacity-70">Wall</label>
+                    <input type="color" id="wallColor" value="#f8f8f8">
+                </div>
+                <div>
+                    <label class="text-[10px] block opacity-70">Ceil</label>
+                    <input type="color" id="ceilColor" value="#ffffff">
+                </div>
+                <div>
+                    <label class="text-[10px] block opacity-70">Carpet</label>
+                    <input type="color" id="carpetColor" value="#4466cc">
+                </div>
+            </div>
+        </section>
+
+        <section class="mb-4 border-b border-gray-700 pb-4">
+            <h2 class="text-sm font-bold mb-2 text-green-400">Furniture</h2>
+            <select id="furnitureSelect"
+                class="w-full bg-gray-800 text-white rounded-lg p-2 mb-2 text-sm outline-none border border-gray-600">
+                <option value="none">-- 家具を選択 --</option>
+                <option value="bed">ベッド</option>
+                <option value="desk">デスク</option>
+                <option value="chair">4本脚チェア</option>
+                <option value="carpet">カーペット</option>
+                <option value="laptop">ノートPC (画面ON)</option>
+                <option value="lamp">スタンドライト (照明付)</option>
+            </select>
+
+            <div id="transformControls" class="hidden space-y-3">
+                <div class="flex items-center justify-between mb-2">
+                    <label class="text-[10px] opacity-70">表示/非表示</label>
+                    <input type="checkbox" id="furnitureVisible" class="w-4 h-4 accent-blue-500">
+                </div>
+                <div>
+                    <label class="text-[10px] flex justify-between">X <span id="valX"
+                            class="text-blue-400">0</span></label>
+                    <input type="range" id="posX" min="-1.4" max="1.4" step="0.01" value="0"
+                        class="w-full accent-blue-500">
+                </div>
+                <div>
+                    <label class="text-[10px] flex justify-between">Z <span id="valZ"
+                            class="text-blue-400">0</span></label>
+                    <input type="range" id="posZ" min="-1.4" max="1.4" step="0.01" value="0"
+                        class="w-full accent-blue-500">
+                </div>
+                <div>
+                    <label class="text-[10px] flex justify-between">回転 <span id="valRot"
+                            class="text-blue-400">0</span>°</label>
+                    <input type="range" id="rotY" min="0" max="360" step="5" value="0" class="w-full accent-blue-500">
+                </div>
+            </div>
+        </section>
+
+        <section class="mb-6">
+            <label class="block text-[10px] mb-1 opacity-70 italic">Light</label>
+            <input type="range" id="lightIntensity" min="0" max="2" step="0.1" value="0.8"
+                class="w-full accent-yellow-500">
+        </section>
+
+        <button id="exportBtn"
+            class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 px-4 rounded-xl transition-all active:scale-95 shadow-lg text-sm">
+            .glbで書き出し (Blender対応)
+        </button>
+    </div>
+
+    <script>
+        let scene, camera, renderer, controls, roomBox, pointLight, sunLight;
+        let wallMat, floorMat, ceilMat, carpetMat;
+        let furniture = {};
+        let staticFeatures = new THREE.Group();
+        let selectedId = 'none';
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111111);
+
+            camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(5, 5, 5);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+            // 色味をBlenderに合わせるための大事な設定だよ！
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            renderer.physicallyCorrectLights = true;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.0;
+
+            document.body.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            // Roughness(粗さ)を少し上げて、反射で色が白飛びするのを防ぐよ
+            wallMat = new THREE.MeshStandardMaterial({ color: 0xf8f8f8, roughness: 0.8 });
+            floorMat = new THREE.MeshStandardMaterial({ color: 0x4a4a4a, roughness: 0.7 });
+            ceilMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1.0 });
+            carpetMat = new THREE.MeshStandardMaterial({ color: 0x4466cc, roughness: 0.9 });
+
+            roomBox = new THREE.Group();
+
+            // 床
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(3, 3), floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            roomBox.add(floor);
+
+            // 天井
+            const ceil = new THREE.Mesh(new THREE.PlaneGeometry(3, 3), ceilMat);
+            ceil.rotation.x = Math.PI / 2;
+            ceil.position.y = 2.5;
+            roomBox.add(ceil);
+
+            const wallGeo = new THREE.PlaneGeometry(3, 2.5);
+
+            // 北壁
+            const wallN = new THREE.Mesh(wallGeo, wallMat);
+            wallN.position.set(0, 1.25, 1.5);
+            wallN.rotation.y = Math.PI;
+            roomBox.add(wallN);
+
+            // 南壁
+            const wallS = new THREE.Mesh(wallGeo, wallMat);
+            wallS.position.set(0, 1.25, -1.5);
+            roomBox.add(wallS);
+
+            // 東壁
+            const wallE = new THREE.Mesh(wallGeo, wallMat);
+            wallE.position.set(1.5, 1.25, 0);
+            wallE.rotation.y = -Math.PI / 2;
+            roomBox.add(wallE);
+
+            // 西壁
+            const wallW = new THREE.Mesh(wallGeo, wallMat);
+            wallW.position.set(-1.5, 1.25, 0);
+            wallW.rotation.y = Math.PI / 2;
+            roomBox.add(wallW);
+
+            scene.add(roomBox);
+
+            createRoomFeatures();
+            createDetailedFurniture();
+
+            // 明るさを調整(physicallyCorrectLightsがONだと数値が変わるよ)
+            scene.add(new THREE.AmbientLight(0xffffff, 1.5));
+            pointLight = new THREE.PointLight(0xffffff, 10, 10);
+            pointLight.position.set(0, 2.3, 0);
+            pointLight.castShadow = true;
+            scene.add(pointLight);
+
+            sunLight = new THREE.DirectionalLight(0xfffaee, 2);
+            sunLight.position.set(0, 1.5, -4);
+            scene.add(sunLight);
+
+            setupUI();
+            window.addEventListener('resize', onWindowResize, false);
+            animate();
+        }
+
+        function createRoomFeatures() {
+            const doorGroup = new THREE.Group();
+            const door = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 1.95), new THREE.MeshStandardMaterial({ color: 0x5d4037 }));
+            door.rotation.y = Math.PI;
+            doorGroup.add(door);
+
+            const handle = new THREE.Mesh(new THREE.SphereGeometry(0.04), new THREE.MeshStandardMaterial({ color: 0xaaaaaa, metalness: 0.8 }));
+            handle.position.set(0.3, -0.05, -0.05);
+            doorGroup.add(handle);
+
+            doorGroup.position.set(-1.0, 0.975, 1.49);
+            staticFeatures.add(doorGroup);
+
+            const closet = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 2.1), new THREE.MeshStandardMaterial({ color: 0xffffff }));
+            closet.rotation.y = Math.PI;
+            closet.position.set(1.0, 1.05, 1.49);
+            staticFeatures.add(closet);
+
+            const winFrame = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.2), new THREE.MeshStandardMaterial({ color: 0x333333 }));
+            winFrame.position.set(0, 1.4, -1.49);
+            staticFeatures.add(winFrame);
+
+            const glass = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.0), new THREE.MeshStandardMaterial({ color: 0x88ccff, transparent: true, opacity: 0.3 }));
+            glass.position.set(0, 1.4, -1.48);
+            staticFeatures.add(glass);
+
+            scene.add(staticFeatures);
+        }
+
+        function createDetailedFurniture() {
+            const woodMat = new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.8 });
+            const metalMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.2, roughness: 0.5 });
+
+            function createRoundedRect(w, d, r) {
+                const shape = new THREE.Shape();
+                shape.moveTo(-w / 2, -d / 2 + r);
+                shape.lineTo(-w / 2, d / 2 - r);
+                shape.quadraticCurveTo(-w / 2, d / 2, -w / 2 + r, d / 2);
+                shape.lineTo(w / 2 - r, d / 2);
+                shape.quadraticCurveTo(w / 2, d / 2, w / 2, d / 2 - r);
+                shape.lineTo(w / 2, -d / 2 + r);
+                shape.quadraticCurveTo(w / 2, -d / 2, w / 2 - r, -d / 2);
+                shape.lineTo(-w / 2 + r, -d / 2);
+                shape.quadraticCurveTo(-w / 2, -d / 2, -w / 2, -d / 2 + r);
+                return shape;
+            }
+
+            // Bed
+            const bed = new THREE.Group();
+            bed.add(new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.2, 2.1), woodMat));
+            const matShape = createRoundedRect(1.0, 1.9, 0.05);
+            const matGeo = new THREE.ExtrudeGeometry(matShape, { depth: 0.2, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.05, bevelSegments: 4 });
+            matGeo.rotateX(Math.PI / 2);
+            const mattress = new THREE.Mesh(matGeo, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 }));
+            mattress.position.y = 0.35; bed.add(mattress);
+
+            const pillowShape = createRoundedRect(0.6, 0.3, 0.05);
+            const pillowGeo = new THREE.ExtrudeGeometry(pillowShape, { depth: 0.08, bevelEnabled: true, bevelThickness: 0.04, bevelSize: 0.04, bevelSegments: 4 });
+            pillowGeo.rotateX(Math.PI / 2);
+            const pillow = new THREE.Mesh(pillowGeo, new THREE.MeshStandardMaterial({ color: 0xeeeeee, roughness: 1.0 }));
+            pillow.position.set(0, 0.5, -0.65); pillow.rotation.x = -0.15; bed.add(pillow);
+
+            bed.position.set(-0.8, 0.1, -0.3); bed.visible = false;
+            scene.add(bed); furniture['bed'] = bed;
+
+            // Desk
+            const desk = new THREE.Group();
+            const dtop = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.08, 0.65), woodMat);
+            dtop.position.y = 0.74; desk.add(dtop);
+            for (let i = 0; i < 4; i++) {
+                const leg = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.74, 0.06), metalMat);
+                leg.position.set((i < 2 ? 0.6 : -0.6), 0.37, (i % 2 === 0 ? 0.28 : -0.28));
+                desk.add(leg);
+            }
+            desk.position.set(0.8, 0, -0.8); desk.visible = false;
+            scene.add(desk); furniture['desk'] = desk;
+
+            // Laptop
+            const laptop = new THREE.Group();
+            laptop.add(new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.02, 0.25), new THREE.MeshStandardMaterial({ color: 0x222222 })));
+            const monitorGroup = new THREE.Group();
+            monitorGroup.position.set(0, 0.01, -0.11); monitorGroup.rotation.x = -0.2;
+            const monitorMesh = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.25, 0.02), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+            monitorMesh.position.set(0, 0.125, 0); monitorGroup.add(monitorMesh);
+            const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.22), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 1 }));
+            screen.position.set(0, 0.125, 0.011); monitorGroup.add(screen);
+            laptop.add(monitorGroup);
+            laptop.position.set(0.8, 0.79, -0.8); laptop.visible = false;
+            scene.add(laptop); furniture['laptop'] = laptop;
+
+            // Lamp (Desk Lamp)
+            const lamp = new THREE.Group();
+            const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.02, 16), metalMat);
+            lampBase.position.y = 0.01;
+            lamp.add(lampBase);
+            const lampArm = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.3, 8), metalMat);
+            lampArm.position.y = 0.16;
+            lamp.add(lampArm);
+            const lampHead = new THREE.Group();
+            lampHead.position.set(0, 0.3, 0.05);
+            lampHead.rotation.x = -Math.PI / 4;
+            const shade = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.15, 16), metalMat);
+            lampHead.add(shade);
+            const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 8), new THREE.MeshStandardMaterial({color: 0xfff0dd, emissive: 0xfff0dd, emissiveIntensity: 2}));
+            bulb.position.set(0, -0.05, 0);
+            lampHead.add(bulb);
+            const lampLight = new THREE.SpotLight(0xfff0dd, 5, 3, Math.PI / 4, 0.5, 2);
+            lampLight.position.set(0, -0.05, 0);
+            const lampTarget = new THREE.Object3D();
+            lampTarget.position.set(0, -1, 0);
+            lampHead.add(lampLight);
+            lampHead.add(lampTarget);
+            lampLight.target = lampTarget;
+            lamp.add(lampHead);
+            lamp.position.set(0.6, 0.78, -0.9); lamp.visible = false;
+            scene.add(lamp); furniture['lamp'] = lamp;
+
+            // Chair
+            const chair = new THREE.Group();
+            const cSeat = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.1, 0.45), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+            cSeat.position.y = 0.45; chair.add(cSeat);
+            const cBack = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.5, 0.08), new THREE.MeshStandardMaterial({ color: 0x222222 }));
+            cBack.position.set(0, 0.75, -0.2); chair.add(cBack);
+            for (let i = 0; i < 4; i++) {
+                const leg = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.4, 0.04), metalMat);
+                leg.position.set((i < 2 ? 0.18 : -0.18), 0.2, (i % 2 === 0 ? 0.18 : -0.18));
+                chair.add(leg);
+            }
+            chair.position.set(0.8, 0, -0.2); chair.visible = false;
+            scene.add(chair); furniture['chair'] = chair;
+
+            // Carpet
+            const carpetShape = new THREE.Shape();
+            carpetShape.absarc(0, 0, 0.9, 0, Math.PI * 2, false);
+            const carpetGeo = new THREE.ExtrudeGeometry(carpetShape, { depth: 0.02, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 4, curveSegments: 32 });
+            carpetGeo.rotateX(Math.PI / 2);
+            const carpet = new THREE.Mesh(carpetGeo, carpetMat);
+            carpet.position.set(0, 0.04, 0); carpet.visible = false;
+            scene.add(carpet); furniture['carpet'] = carpet;
+        }
+
+        function saveFurnitureData() {
+            const data = {};
+            for (const key in furniture) {
+                data[key] = {
+                    x: furniture[key].position.x,
+                    z: furniture[key].position.z,
+                    ry: furniture[key].rotation.y,
+                    v: furniture[key].visible
+                };
+            }
+            localStorage.setItem('3droom_furniture', JSON.stringify(data));
+        }
+
+        function loadFurnitureData() {
+            const saved = localStorage.getItem('3droom_furniture');
+            if (saved) {
+                try {
+                    const data = JSON.parse(saved);
+                    for (const key in data) {
+                        if (furniture[key]) {
+                            furniture[key].position.x = data[key].x;
+                            furniture[key].position.z = data[key].z;
+                            furniture[key].rotation.y = data[key].ry;
+                            furniture[key].visible = data[key].v;
+                        }
+                    }
+                } catch (e) { console.error(e); }
+            }
+        }
+
+        function setupUI() {
+            loadFurnitureData();
+
+            const select = document.getElementById('furnitureSelect');
+            select.addEventListener('change', (e) => {
+                selectedId = e.target.value;
+                if (selectedId !== 'none') {
+                    document.getElementById('transformControls').classList.remove('hidden');
+                    
+                    document.getElementById('posX').value = furniture[selectedId].position.x;
+                    document.getElementById('posZ').value = furniture[selectedId].position.z;
+                    document.getElementById('rotY').value = THREE.MathUtils.radToDeg(furniture[selectedId].rotation.y);
+                    document.getElementById('valX').innerText = furniture[selectedId].position.x.toFixed(2);
+                    document.getElementById('valZ').innerText = furniture[selectedId].position.z.toFixed(2);
+                    document.getElementById('valRot').innerText = Math.round(THREE.MathUtils.radToDeg(furniture[selectedId].rotation.y));
+                    document.getElementById('furnitureVisible').checked = furniture[selectedId].visible;
+                } else {
+                    document.getElementById('transformControls').classList.add('hidden');
+                }
+            });
+
+            const updatePos = () => {
+                if (selectedId === 'none') return;
+                furniture[selectedId].position.x = parseFloat(document.getElementById('posX').value);
+                furniture[selectedId].position.z = parseFloat(document.getElementById('posZ').value);
+                furniture[selectedId].rotation.y = THREE.MathUtils.degToRad(parseFloat(document.getElementById('rotY').value));
+                document.getElementById('valX').innerText = document.getElementById('posX').value;
+                document.getElementById('valZ').innerText = document.getElementById('posZ').value;
+                document.getElementById('valRot').innerText = document.getElementById('rotY').value;
+                saveFurnitureData();
+            };
+
+            const updateVis = () => {
+                if (selectedId === 'none') return;
+                furniture[selectedId].visible = document.getElementById('furnitureVisible').checked;
+                saveFurnitureData();
+            };
+
+            ['posX', 'posZ', 'rotY'].forEach(id => document.getElementById(id).addEventListener('input', updatePos));
+            document.getElementById('furnitureVisible').addEventListener('change', updateVis);
+            document.getElementById('floorColor').addEventListener('input', (e) => floorMat.color.set(e.target.value));
+            document.getElementById('wallColor').addEventListener('input', (e) => wallMat.color.set(e.target.value));
+            document.getElementById('ceilColor').addEventListener('input', (e) => ceilMat.color.set(e.target.value));
+            document.getElementById('carpetColor').addEventListener('input', (e) => carpetMat.color.set(e.target.value));
+            document.getElementById('lightIntensity').addEventListener('input', (e) => pointLight.intensity = parseFloat(e.target.value) * 10);
+            document.getElementById('exportBtn').addEventListener('click', exportScene);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function exportScene() {
+            const exporter = new THREE.GLTFExporter();
+            const exportGroup = new THREE.Group();
+            exportGroup.add(roomBox.clone());
+            exportGroup.add(staticFeatures.clone());
+            Object.values(furniture).forEach(f => { if (f.visible) exportGroup.add(f.clone()); });
+
+            exporter.parse(exportGroup, function (result) {
+                const blob = new Blob([result], { type: 'application/octet-stream' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = 'monyu_room_v2.7.glb';
+                link.click();
+            }, { binary: true });
+        }
+
+        window.onload = init;
+    </script>
+</body>
+
+</html>
